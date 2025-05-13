@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Flask сервер для Render ---
+# --- Определяем Flask приложение и функцию запуска ---
 app = Flask("")
 
 @app.route("/")
@@ -22,7 +22,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# --- Telegram бота код ---
+# --- Telegram-бот ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Введите название трека для поиска:")
@@ -68,9 +68,8 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def main():
-    # Удаляем webhook, если он был установлен, чтобы разрешить polling
+    # Удаляем webhook, если он был установлен
     await app_bot.bot.delete_webhook()
-    
     # Запускаем polling
     await app_bot.run_polling()
 
@@ -78,10 +77,9 @@ if __name__ == "__main__":
     # Запускаем Flask сервер в отдельном потоке
     threading.Thread(target=run_flask).start()
 
-    # Создаём приложение Telegram-бота
+    # Создаём Telegram-бота
     app_bot = Application.builder().token(os.environ['BOT_TOKEN']).build()
 
-    # Регистрируем обработчики
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
