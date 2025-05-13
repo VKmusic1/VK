@@ -8,10 +8,11 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
-# --- Определяем Flask приложение и функцию запуска ---
+# --- Flask сервер для Render ---
 app = Flask("")
 
 @app.route("/")
@@ -84,5 +85,7 @@ if __name__ == "__main__":
     app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    import asyncio
-    asyncio.run(main())
+    # Запускаем цикл событий и main() как задачу
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    loop.run_forever()
