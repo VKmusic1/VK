@@ -13,7 +13,7 @@ async def search_vk_music(query: str):
     url = "https://api.vk.com/method/audio.search"
     params = {
         "q": query,
-        "access_token": os.getenv("8024324775:AAHybRKeNo3GmNOyu3-m4yUxNleF0b28xuk"),
+        "access_token": os.getenv("VK_TOKEN"),
         "v": "5.131"
     }
     response = requests.get(url, params=params).json()
