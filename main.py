@@ -8,6 +8,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
@@ -63,12 +64,11 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title="Трек из VK"
     )
 
-def main():
-    # Удаляем webhook, если он был установлен
-    app_bot.bot.delete_webhook()
-
-    # Запускаем polling (блокирующий вызов)
-    app_bot.run_polling()
+async def main():
+    # Удаляем webhook, чтобы разрешить polling
+    await app_bot.bot.delete_webhook()
+    # Запускаем polling (асинхронно)
+    await app_bot.run_polling()
 
 if __name__ == "__main__":
     # Запускаем Flask сервер в отдельном потоке
@@ -82,5 +82,7 @@ if __name__ == "__main__":
     app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Запускаем бота
-    main()
+    # Запускаем асинхронно main() в уже запущенном event loop
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    loop.run_forever()
