@@ -1,10 +1,28 @@
 import os
+import threading
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
+)
 from dotenv import load_dotenv
+from flask import Flask
 
 load_dotenv()
+
+# --- Flask сервер для Render ---
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot is running"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+# --- Telegram бота код ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Введите название трека для поиска:")
@@ -40,7 +58,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    url = query.data.split('_')[1]
+    url = query.data.split('_', 1)[1]
     
     await query.edit_message_text("⏳ Скачиваю трек...")
     await context.bot.send_audio(
@@ -50,10 +68,14 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 if __name__ == "__main__":
-    app = Application.builder().token(os.getenv("BOT_TOKEN")).build()
+    # Запускаем Flask в отдельном потоке
+    threading.Thread(target=run_flask).start()
+
+    # Инициализация и запуск Telegram-бота
+    app_bot = Application.builder().token(os.environ['BOT_TOKEN']).build()
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    app.run_polling()
+    app_bot.run_polling()
