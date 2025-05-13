@@ -1,34 +1,15 @@
 import os
 import threading
 import requests
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes
 )
 from dotenv import load_dotenv
-from flask import Flask
 
 load_dotenv()
-
-async def main():
-    # Удаляем webhook, чтобы разрешить polling
-    await app_bot.bot.delete_webhook()
-    
-    # Запускаем polling
-    await app_bot.run_polling()
-
-if __name__ == "__main__":
-    import asyncio
-    threading.Thread(target=run_flask).start()
-    
-    app_bot = Application.builder().token(os.environ['BOT_TOKEN']).build()
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
-    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    asyncio.run(main())
-
 
 # --- Flask сервер для Render ---
 app = Flask("")
@@ -86,15 +67,24 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title="Трек из VK"
     )
 
+async def main():
+    # Удаляем webhook, если он был установлен, чтобы разрешить polling
+    await app_bot.bot.delete_webhook()
+    
+    # Запускаем polling
+    await app_bot.run_polling()
+
 if __name__ == "__main__":
-    # Запускаем Flask в отдельном потоке
+    # Запускаем Flask сервер в отдельном потоке
     threading.Thread(target=run_flask).start()
 
-    # Инициализация и запуск Telegram-бота
+    # Создаём приложение Telegram-бота
     app_bot = Application.builder().token(os.environ['BOT_TOKEN']).build()
-    
+
+    # Регистрируем обработчики
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    app_bot.run_polling()
+
+    import asyncio
+    asyncio.run(main())
