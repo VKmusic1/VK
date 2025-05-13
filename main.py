@@ -8,10 +8,10 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 from dotenv import load_dotenv
-import asyncio
 
 load_dotenv()
 
+# --- Flask сервер для Render ---
 app = Flask("")
 
 @app.route("/")
@@ -21,6 +21,8 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
+# --- Telegram-бот ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Введите название трека для поиска:")
@@ -61,21 +63,24 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title="Трек из VK"
     )
 
-async def main():
+def main():
     # Удаляем webhook, если он был установлен
-    await app_bot.bot.delete_webhook()
-    # Запускаем polling (не закрывая цикл)
-    await app_bot.run_polling()
+    app_bot.bot.delete_webhook()
+
+    # Запускаем polling (блокирующий вызов)
+    app_bot.run_polling()
 
 if __name__ == "__main__":
+    # Запускаем Flask сервер в отдельном потоке
     threading.Thread(target=run_flask).start()
 
+    # Создаём Telegram-бота
     app_bot = Application.builder().token(os.environ['BOT_TOKEN']).build()
 
+    # Регистрируем обработчики
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    loop.run_forever()
+    # Запускаем бота
+    main()
