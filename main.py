@@ -11,6 +11,25 @@ from flask import Flask
 
 load_dotenv()
 
+async def main():
+    # Удаляем webhook, чтобы разрешить polling
+    await app_bot.bot.delete_webhook()
+    
+    # Запускаем polling
+    await app_bot.run_polling()
+
+if __name__ == "__main__":
+    import asyncio
+    threading.Thread(target=run_flask).start()
+    
+    app_bot = Application.builder().token(os.environ['BOT_TOKEN']).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CallbackQueryHandler(download_track, pattern="^download_"))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    asyncio.run(main())
+
+
 # --- Flask сервер для Render ---
 app = Flask("")
 
