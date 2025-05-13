@@ -62,7 +62,9 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def main():
+    # Удаляем webhook, если он был установлен
     await app_bot.bot.delete_webhook()
+    # Запускаем polling (не закрывая цикл)
     await app_bot.run_polling()
 
 if __name__ == "__main__":
