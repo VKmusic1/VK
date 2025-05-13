@@ -7,13 +7,13 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes
 )
-from dotenv import load_dotenv
 import asyncio
+from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- Flask сервер для Render ---
-app = Flask("")
+app = Flask(__name__)
 
 @app.route("/")
 def home():
@@ -67,8 +67,8 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     # Удаляем webhook, чтобы разрешить polling
     await app_bot.bot.delete_webhook()
-    # Запускаем polling (асинхронно)
-    await app_bot.run_polling()
+    # Запускаем polling без закрытия цикла событий
+    await app_bot.run_polling(close_loop=False)
 
 if __name__ == "__main__":
     # Запускаем Flask сервер в отдельном потоке
