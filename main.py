@@ -1,21 +1,15 @@
-# main.py
-
 import os
 import logging
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-    ContextTypes
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, filters
 )
 
-# --- Загрузка переменных окружения и логирование ---
+# 1) Настройка
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -23,74 +17,71 @@ logging.basicConfig(
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("Нужно задать BOT_TOKEN в .env или в переменных окружения")
+APP_URL   = os.getenv("APP_URL") or os.getenv("RENDER_EXTERNAL_URL")
+PORT      = int(os.getenv("PORT", "5000"))
 
-# --- Гарантированно сбросим любой webhook ---
-bot = Bot(BOT_TOKEN)
-bot.delete_webhook(drop_pending_updates=True)
+if not BOT_TOKEN or not APP_URL:
+    raise RuntimeError("Нужно задать BOT_TOKEN и APP_URL/RENDER_EXTERNAL_URL")
 
-# --- Парсинг аудио с мобильного VK ---
+# 2) Функция парсинга мобильного VK
 def search_vk_mobile(query: str):
-    url = "https://m.vk.com/search"
-    params = {"c[section]": "audio", "q": query}
-    headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, params=params, headers=headers)
+    resp = requests.get(
+        "https://m.vk.com/search",
+        params={"c[section]": "audio", "q": query},
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-
     tracks = []
-    for div in soup.find_all("div", class_="audio_row")[:5]:
-        artist = div.find("div", class_="audio_row__performers")
-        title  = div.find("div", class_="audio_row__title")
-        src    = div.get("data-url")
-        if artist and title and src:
+    for div in soup.select("div.audio_row")[:5]:
+        artist = div.select_one("div.audio_row__performers")
+        title  = div.select_one("div.audio_row__title")
+        url     = div.get("data-url")
+        if artist and title and url:
             tracks.append({
                 "artist": artist.get_text(strip=True),
                 "title":  title.get_text(strip=True),
-                "url":    src
+                "url":    url
             })
     return tracks
 
-# --- Telegram-хэндлеры ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 3) Handlers
+async def start(update: Update, context):
     await update.message.reply_text("Введите название трека для поиска:")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.strip()
-    if not query:
+async def handle_search(update: Update, context):
+    q = update.message.text.strip()
+    if not q:
         return
-    tracks = search_vk_mobile(query)
+    tracks = search_vk_mobile(q)
     if not tracks:
         return await update.message.reply_text("Треки не найдены.")
-    keyboard = [
-        [InlineKeyboardButton(
-            f"{t['artist']} — {t['title']}",
-            callback_data=f"dl_{t['url']}"
-        )]
+    kb = [
+        [InlineKeyboardButton(f"{t['artist']} — {t['title']}", callback_data=f"dl_{t['url']}")]
         for t in tracks
     ]
-    await update.message.reply_text(
-        "Результаты поиска:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("Результаты поиска:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cq = update.callback_query
+async def download_track(update: Update, context):
+    cq  = update.callback_query
     url = cq.data.split("_", 1)[1]
     await cq.edit_message_text("Скачиваю…")
-    await context.bot.send_audio(
-        chat_id=cq.message.chat_id,
-        audio=url,
-        title="Трек из VK"
-    )
+    await context.bot.send_audio(chat_id=cq.message.chat_id, audio=url, title="Трек из VK")
 
-# --- Запуск бота через polling ---
+# 4) Создаём приложение и регистрируем handlers
+app = Application.builder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search))
+app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
+
+# 5) Запускаем webhook-сервер
 if __name__ == "__main__":
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
+    # Убедимся, что нет старого webhook
+    app.bot.delete_webhook(drop_pending_updates=True)
 
-    # Запускаем polling, конфликт webhook/getUpdates больше не возникнет
-    app.run_polling()
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+    )
