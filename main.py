@@ -9,7 +9,7 @@ from telegram.ext import (
     CallbackQueryHandler, filters
 )
 
-# 1) Настройка
+# 1) Настройка и логирование
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -23,7 +23,14 @@ PORT      = int(os.getenv("PORT", "5000"))
 if not BOT_TOKEN or not APP_URL:
     raise RuntimeError("Нужно задать BOT_TOKEN и APP_URL/RENDER_EXTERNAL_URL")
 
-# 2) Функция парсинга мобильного VK
+# 2) Синхронно сбрасываем любой старый webhook
+delete_resp = requests.get(
+    f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+)
+if not delete_resp.ok:
+    logging.warning("deleteWebhook failed: %s", delete_resp.text)
+
+# 3) Функция парсинга мобильного VK
 def search_vk_mobile(query: str):
     resp = requests.get(
         "https://m.vk.com/search",
@@ -36,7 +43,7 @@ def search_vk_mobile(query: str):
     for div in soup.select("div.audio_row")[:5]:
         artist = div.select_one("div.audio_row__performers")
         title  = div.select_one("div.audio_row__title")
-        url     = div.get("data-url")
+        url    = div.get("data-url")
         if artist and title and url:
             tracks.append({
                 "artist": artist.get_text(strip=True),
@@ -45,7 +52,7 @@ def search_vk_mobile(query: str):
             })
     return tracks
 
-# 3) Handlers
+# 4) Хэндлеры бота
 async def start(update: Update, context):
     await update.message.reply_text("Введите название трека для поиска:")
 
@@ -68,16 +75,12 @@ async def download_track(update: Update, context):
     await cq.edit_message_text("Скачиваю…")
     await context.bot.send_audio(chat_id=cq.message.chat_id, audio=url, title="Трек из VK")
 
-# 4) Создаём приложение и регистрируем handlers
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search))
-app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
-
-# 5) Запускаем webhook-сервер
+# 5) Сборка приложения и запуск webhook
 if __name__ == "__main__":
-    # Убедимся, что нет старого webhook
-    app.bot.delete_webhook(drop_pending_updates=True)
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search))
+    app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
 
     app.run_webhook(
         listen="0.0.0.0",
