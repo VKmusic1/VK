@@ -1,97 +1,59 @@
 import os
 import logging
-import threading
 import requests
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from flask import Flask
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-    ContextTypes
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, filters, ContextTypes
 )
 
 # --- Настройка и логирование ---
 load_dotenv()
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+logging.basicConfig(level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-PORT      = int(os.getenv("PORT", 5000))
-if not BOT_TOKEN:
-    raise RuntimeError("Нужно задать BOT_TOKEN в .env или в переменных окружения")
+VK_TOKEN  = os.getenv("VK_TOKEN")
+if not BOT_TOKEN or not VK_TOKEN:
+    raise RuntimeError("В .env должны быть BOT_TOKEN и VK_TOKEN")
 
-# --- Запускаем минимальный Flask для прослушивания порта ---
-flask_app = Flask(__name__)
-@flask_app.route("/")
-def health_check():
-    return "OK", 200
+# --- Поиск через официальный метод audio.search ---
+def search_vk_music(query: str):
+    params = {
+        "q":            query,
+        "access_token": VK_TOKEN,
+        "v":            "5.131",
+        "count":        5
+    }
+    r = requests.get("https://api.vk.com/method/audio.search", params=params)
+    data = r.json()
+    return data.get("response", {}).get("items", [])
 
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=PORT)
-
-threading.Thread(target=run_flask, daemon=True).start()
-
-# --- Сбрасываем вебхук, чтобы не было Conflict ---
-Bot(BOT_TOKEN).delete_webhook(drop_pending_updates=True)
-
-# --- Парсер мобильного VK ---
-def search_vk_mobile(query: str):
-    resp = requests.get(
-        "https://m.vk.com/search",
-        params={"c[section]": "audio", "q": query},
-        headers={"User-Agent": "Mozilla/5.0"}
-    )
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-    tracks = []
-    for div in soup.find_all("div", attrs={"data-url": True}):
-        url = div["data-url"]
-        artist_el = div.select_one(
-            ".audio_row__performers, .audioRow__performers"
-        )
-        title_el = div.select_one(
-            ".audio_row__title, .audioRow__title"
-        )
-        if not (artist_el and title_el):
-            continue
-        tracks.append({
-            "artist": artist_el.get_text(strip=True),
-            "title":  title_el.get_text(strip=True),
-            "url":    url
-        })
-        if len(tracks) >= 5:
-            break
-    return tracks
-
-# --- Handlers для Telegram ---
+# --- Хэндлеры бота ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введите название трека для поиска:")
+    await update.message.reply_text("Введите название трека:")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.message.text.strip()
     if not q:
         return
-    tracks = search_vk_mobile(q)
+    tracks = search_vk_music(q)
     if not tracks:
         return await update.message.reply_text("Треки не найдены.")
     kb = [
-        [InlineKeyboardButton(f"{t['artist']} — {t['title']}", callback_data=f"dl_{t['url']}")]
+        [InlineKeyboardButton(f"{t['artist']} — {t['title']}",
+                              callback_data=f"dl_{t['url']}")]
         for t in tracks
     ]
-    await update.message.reply_text("Результаты поиска:", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text("Результаты:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cq = update.callback_query
+    cq  = update.callback_query
     url = cq.data.split("_", 1)[1]
     await cq.edit_message_text("Скачиваю…")
-    await context.bot.send_audio(chat_id=cq.message.chat_id, audio=url, title="Трек из VK")
+    await context.bot.send_audio(chat_id=cq.message.chat_id, audio=url)
 
 # --- Запуск polling ---
 if __name__ == "__main__":
