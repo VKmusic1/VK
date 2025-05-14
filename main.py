@@ -15,7 +15,7 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- Загрузка конфигурации ---
+# --- Загрузка переменных окружения и логирование ---
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -26,20 +26,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("Нужно задать BOT_TOKEN в .env или в переменных окружения")
 
-# --- Сбрасываем любой webhook через HTTP-запрос (синхронно) ---
-delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-resp = requests.get(delete_url)
-if not resp.ok:
-    logging.warning("Не смог сбросить вебхук: %s", resp.text)
+# --- Гарантированно сбросим любой webhook ---
+bot = Bot(BOT_TOKEN)
+bot.delete_webhook(drop_pending_updates=True)
 
-# --- Функция парсинга VK Mobile ---
+# --- Парсинг аудио с мобильного VK ---
 def search_vk_mobile(query: str):
     url = "https://m.vk.com/search"
     params = {"c[section]": "audio", "q": query}
     headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, params=params, headers=headers)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
+    resp = requests.get(url, params=params, headers=headers)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
 
     tracks = []
     for div in soup.find_all("div", class_="audio_row")[:5]:
@@ -59,10 +57,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите название трека для поиска:")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.message.text.strip()
-    if not q:
+    query = update.message.text.strip()
+    if not query:
         return
-    tracks = search_vk_mobile(q)
+    tracks = search_vk_mobile(query)
     if not tracks:
         return await update.message.reply_text("Треки не найдены.")
     keyboard = [
@@ -73,12 +71,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for t in tracks
     ]
     await update.message.reply_text(
-        "Результаты поиска:", 
+        "Результаты поиска:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cq  = update.callback_query
+    cq = update.callback_query
     url = cq.data.split("_", 1)[1]
     await cq.edit_message_text("Скачиваю…")
     await context.bot.send_audio(
@@ -87,12 +85,12 @@ async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title="Трек из VK"
     )
 
-# --- Запуск бота ---
+# --- Запуск бота через polling ---
 if __name__ == "__main__":
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
 
-    # polling; close_loop=False чтобы не мешать другим потокам (если будут)
-    app.run_polling(close_loop=False)
+    # Запускаем polling, конфликт webhook/getUpdates больше не возникнет
+    app.run_polling()
