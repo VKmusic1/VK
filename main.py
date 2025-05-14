@@ -1,121 +1,85 @@
 import os
-import threading
 import logging
-from dotenv import load_dotenv
-from flask import Flask, request
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes
-)
 import requests
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes
+)
 
-# --- Настройка ---
+# 1) Настройка
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-BOT_TOKEN     = os.getenv("BOT_TOKEN")
-VK_APP_ID     = os.getenv("VK_APP_ID")
-VK_APP_SECRET = os.getenv("VK_APP_SECRET")
-APP_URL       = os.getenv("APP_URL") or os.getenv("RENDER_EXTERNAL_URL")
-PORT          = int(os.getenv("PORT", 5000))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("Нужно задать BOT_TOKEN в .env")
 
-if not all([BOT_TOKEN, VK_APP_ID, VK_APP_SECRET, APP_URL]):
-    raise RuntimeError("Нужно задать BOT_TOKEN, VK_APP_ID, VK_APP_SECRET и APP_URL/RENDER_EXTERNAL_URL")
-
-# Словарь для хранения user_token по chat_id
-user_tokens: dict[int, str] = {}
-
-# --- Flask для колбэка OAuth2 ---
-flask_app = Flask(__name__)
-
-@flask_app.route("/")
-def home():
-    return "Bot is running"
-
-@flask_app.route("/callback")
-def vk_callback():
-    code    = request.args.get("code")
-    state   = request.args.get("state")      # тут chat_id
-    chat_id = int(state) if state and state.isdigit() else None
-
-    if not code or not chat_id:
-        return "Missing code or state", 400
-
-    # Обменяем code на access_token
-    resp = requests.get("https://oauth.vk.com/access_token", params={
-        "client_id":     VK_APP_ID,
-        "client_secret": VK_APP_SECRET,
-        "redirect_uri":  f"{APP_URL}/callback",
-        "code":          code
-    }).json()
-
-    token = resp.get("access_token")
-    if not token:
-        return "VK auth failed", 400
-
-    user_tokens[chat_id] = token
-
-    # Отправим юзеру в Telegram уведомление
-    Bot(BOT_TOKEN).send_message(
-        chat_id=chat_id,
-        text="✅ Авторизация VK прошла успешно! Теперь можно искать треки."
-    )
-    return "OK"
-
-# Запускаем Flask в фоне
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=PORT)
-
-threading.Thread(target=run_flask, daemon=True).start()
-
-# --- Telegram-бот ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! Чтобы искать музыку, сначала авторизуйся командой /login"
-    )
-
-async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    auth_url = (
-        f"https://oauth.vk.com/authorize?"
-        f"client_id={VK_APP_ID}&"
-        f"display=page&"
-        f"redirect_uri={APP_URL}/callback&"
-        f"scope=audio&"
-        f"response_type=code&"
-        f"state={chat_id}"
-    )
-    await update.message.reply_text(
-        f"Перейди по ссылке для авторизации:\n{auth_url}"
-    )
-
-async def search_vk_music(query: str, token: str):
+# 2) Функция парсинга mobile-страницы VK
+def search_vk_mobile(query: str):
+    url = "https://m.vk.com/search"
     params = {
-        "q":             query,
-        "access_token":  token,
-        "v":             "5.131",
-        "count":         5
+        "c[section]": "audio",
+        "q": query
     }
-    resp = requests.get("https://api.vk.com/method/audio.search", params=params).json()
-    return resp.get("response", {}).get("items", [])
+    headers = {
+        # Имитация браузера, чтобы выдавали HTML со списком
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    resp = requests.get(url, params=params, headers=headers)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    tracks = []
+    # каждый трек лежит в div.audio_row
+    for div in soup.find_all("div", class_="audio_row")[:5]:
+        artist = div.find("div", class_="audio_row__performers")
+        title  = div.find("div", class_="audio_row__title")
+        src    = div.get("data-url")  # ссылка на mp3
+
+        if not (artist and title and src):
+            continue
+
+        tracks.append({
+            "artist": artist.get_text(strip=True),
+            "title":  title.get_text(strip=True),
+            "url":    src
+        })
+    return tracks
+
+# 3) Telegram-хэндлеры
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введите название трека для поиска:")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    token   = user_tokens.get(chat_id)
-    if not token:
-        return await update.message.reply_text("Сначала авторизуйся: /login")
+    query = update.message.text.strip()
+    if not query:
+        return
 
-    query  = update.message.text
-    tracks = await search_vk_music(query, token)
+    tracks = search_vk_mobile(query)
     if not tracks:
-        return await update.message.reply_text("Треки не найдены")
+        return await update.message.reply_text("Треки не найдены.")
 
     keyboard = [
-        [InlineKeyboardButton(f"{t['artist']} – {t['title']}", callback_data=f"dl_{t['url']}")]
+        [
+            InlineKeyboardButton(
+                f"{t['artist']} — {t['title']}",
+                callback_data=f"dl_{t['url']}"
+            )
+        ]
         for t in tracks
     ]
     await update.message.reply_text(
@@ -126,20 +90,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query
     url = q.data.split("_", 1)[1]
-    await q.edit_message_text("Скачиваю трек…")
+    await q.edit_message_text("Скачиваю…")
     await context.bot.send_audio(
         chat_id=q.message.chat_id,
         audio=url,
         title="Трек из VK"
     )
 
-# Создаём и запускаем polling
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("login", login))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
-
+# 4) Сборка и запуск бота
 if __name__ == "__main__":
-    # close_loop=False чтобы не тормозить основной поток с Flask
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+    app.add_handler(
+        CallbackQueryHandler(download_track, pattern="^dl_")
+    )
+
+    # polling; close_loop=False чтобы не сбивать Flask (если он был бы)
     app.run_polling(close_loop=False)
