@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from flask import Flask
+import asyncio
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -15,7 +16,7 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- Загрузка переменных и логирование ---
+# --- Загрузка переменных окружения и логирование ---
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -34,6 +35,13 @@ if not BOT_TOKEN or not VK_SID:
     print("ОШИБКА: Нет BOT_TOKEN или VK_SID в ENV. Проверь настройки!")
     raise RuntimeError("Нужно задать BOT_TOKEN и VK_SID в .env или переменных окружения")
 
+# --- Принудительный сброс webhook (решает конфликт!) ---
+async def delete_webhook_sync():
+    await Bot(BOT_TOKEN).delete_webhook(drop_pending_updates=True)
+
+print("DEBUG: Удаляем Webhook...")
+asyncio.run(delete_webhook_sync())
+
 # --- Минимальный Flask для Render ---
 flask_app = Flask(__name__)
 
@@ -46,10 +54,6 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=PORT)
 
 threading.Thread(target=run_flask, daemon=True).start()
-
-# --- Сброс webhook перед polling ---
-print("DEBUG: Удаляем Webhook...")
-Bot(BOT_TOKEN).delete_webhook(drop_pending_updates=True)
 
 # --- Поиск музыки на m.vk.com ---
 def search_vk_mobile(query: str):
