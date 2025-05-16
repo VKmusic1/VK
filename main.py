@@ -5,8 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from flask import Flask
-import asyncio
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,7 +15,6 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- Загрузка переменных окружения и логирование ---
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -27,22 +25,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 VK_SID = os.getenv("VK_SID")
 PORT = int(os.getenv("PORT", 5000))
 
-print("DEBUG: BOT_TOKEN:", "SET" if BOT_TOKEN else "MISSING")
-print("DEBUG: VK_SID:", VK_SID[:10] + "..." if VK_SID else "MISSING")
-print("DEBUG: PORT:", PORT)
-
 if not BOT_TOKEN or not VK_SID:
-    print("ОШИБКА: Нет BOT_TOKEN или VK_SID в ENV. Проверь настройки!")
     raise RuntimeError("Нужно задать BOT_TOKEN и VK_SID в .env или переменных окружения")
 
-# --- Принудительный сброс webhook (решает конфликт!) ---
-async def delete_webhook_sync():
-    await Bot(BOT_TOKEN).delete_webhook(drop_pending_updates=True)
-
-print("DEBUG: Удаляем Webhook...")
-asyncio.run(delete_webhook_sync())
-
-# --- Минимальный Flask для Render ---
+# Flask для Render
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -50,14 +36,12 @@ def health_check():
     return "OK", 200
 
 def run_flask():
-    print("DEBUG: Flask сервер запущен на порту", PORT)
     flask_app.run(host="0.0.0.0", port=PORT)
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-# --- Поиск музыки на m.vk.com ---
+# VK поиск
 def search_vk_mobile(query: str):
-    print(f"DEBUG: Ищем VK: {query}")
     url = "https://m.vk.com/search"
     params = {"c[section]": "audio", "q": query}
     headers = {
@@ -66,13 +50,7 @@ def search_vk_mobile(query: str):
                       "Chrome/124.0.0.0 Safari/537.36"
     }
     cookies = {"remixsid": VK_SID}
-    try:
-        r = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=10)
-    except Exception as e:
-        print("ОШИБКА VK:", e)
-        return []
-    print("DEBUG: VK статус:", r.status_code)
-    print("DEBUG: VK ответ (первые 500 символов):\n", r.text[:500])
+    r = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=10)
     soup = BeautifulSoup(r.text, "html.parser")
     tracks = []
     for div in soup.find_all("div", attrs={"data-url": True}):
@@ -88,23 +66,19 @@ def search_vk_mobile(query: str):
         })
         if len(tracks) >= 5:
             break
-    print(f"DEBUG: Найдено треков: {len(tracks)}")
     return tracks
 
-# --- Telegram-хэндлеры ---
+# Telegram хендлеры
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("DEBUG: Обработан /start")
     await update.message.reply_text("Введите название трека для поиска:")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.message.text.strip()
-    print(f"DEBUG: handle_message: {q}")
     if not q:
         return
     tracks = search_vk_mobile(q)
     if not tracks:
         await update.message.reply_text("Треки не найдены.")
-        print("DEBUG: Треки не найдены.")
         return
     kb = [
         [InlineKeyboardButton(f"{t['artist']} — {t['title']}", callback_data=f"dl_{t['url']}")]
@@ -115,15 +89,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def download_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cq = update.callback_query
     url = cq.data.split("_", 1)[1]
-    print(f"DEBUG: Скачиваем аудио: {url}")
     await cq.edit_message_text("Скачиваю…")
     await context.bot.send_audio(chat_id=cq.message.chat_id, audio=url, title="Трек из VK")
 
-# --- Запуск polling ---
 if __name__ == "__main__":
-    print("DEBUG: Запускаем Telegram polling...")
     app = Application.builder().token(BOT_TOKEN).build()
+    # --- Важно! сбрасывай webhook через Application ---
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(download_track, pattern="^dl_"))
-    app.run_polling()
+    # Сброс вебхука в Application.run_polling:
+    app.run_polling(drop_pending_updates=True)
