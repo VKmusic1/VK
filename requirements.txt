@@ -1,5 +1,2 @@
-Flask==2.3.2
-python-telegram-bot==20.5
-requests==2.31.0
-beautifulsoup4==4.12.2
-python-dotenv==1.0.0
+yt-dlp==2024.4.9
+google-api-python-client==2.126.0
